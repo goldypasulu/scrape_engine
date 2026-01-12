@@ -1,0 +1,40 @@
+{
+  "name": "tokopedia-scrape-engine",
+  "version": "1.0.0",
+  "description": "Production-grade e-commerce scraping engine for Tokopedia with anti-detection and job queue support",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "worker": "node scripts/start-worker.js",
+    "enqueue": "node scripts/enqueue-job.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": [
+    "scraping",
+    "puppeteer",
+    "tokopedia",
+    "e-commerce",
+    "bullmq"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "bullmq": "^5.1.0",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.3.1",
+    "ioredis": "^5.3.2",
+    "pino": "^8.17.2",
+    "pino-pretty": "^10.3.1",
+    "puppeteer": "^21.7.0",
+    "puppeteer-cluster": "^0.23.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
