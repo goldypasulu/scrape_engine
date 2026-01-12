@@ -9,21 +9,33 @@ export { SELECTORS, getSelectorVariants } from './config/selectors.js';
 export { getRandomUserAgent, getRandomDesktopUserAgent } from './config/user-agents.js';
 
 // Core
-export { getPuppeteer, configurePage } from './core/stealth.js';
-export { getCluster, queueTask, closeCluster } from './core/cluster.js';
+export { getPuppeteer, configurePage, verifyStealthConfiguration } from './core/stealth.js';
+export { 
+  getCluster, 
+  queueTask, 
+  closeCluster, 
+  getClusterStatus,
+  forceKillBrowsers,
+} from './core/cluster.js';
 export * as browserUtils from './core/browser-utils.js';
 
 // Scraper
-export { autoScroll, scrollToElement, scrollToTop } from './scraper/auto-scroll.js';
+export { autoScroll, scrollToElement, scrollToTop, scrollUntilItemCount } from './scraper/auto-scroll.js';
 export { scrapeProducts, buildSearchUrl } from './scraper/product-scraper.js';
 export * as domSelector from './scraper/dom-selector.js';
 
 // Parser
-export { parseProductCards, parsePage } from './parser/html-parser.js';
+export { parseProductCards, parsePage, validateHtmlStructure } from './parser/html-parser.js';
 export * as dataTransformer from './parser/data-transformer.js';
 
 // Queue
-export { getConnection, closeConnection } from './queue/connection.js';
+export { 
+  getConnection, 
+  closeConnection, 
+  closeAllConnections,
+  checkConnectionHealth,
+  getConnectionStats,
+} from './queue/connection.js';
 export { 
   enqueueScrapeJob, 
   enqueueBulkJobs, 
@@ -32,7 +44,12 @@ export {
   getFailedJobs,
   closeQueue,
 } from './queue/producer.js';
-export { startWorker, stopWorker, getWorkerStatus } from './queue/worker.js';
+export { 
+  startWorker, 
+  stopWorker, 
+  getWorkerStatus,
+  getActiveJobs,
+} from './queue/worker.js';
 
 // Utils
 export * as delay from './utils/delay.js';
