@@ -87,6 +87,31 @@ export const config = {
     ],
   },
 
+  // ====== PROXY CONFIGURATION (CRITICAL for Production) ======
+  // Without proxy rotation, Tokopedia will block your IP within 5 minutes
+  // 
+  // Recommended services:
+  // - BrightData (Luminati): http://user:pass@zproxy.lum-superproxy.io:22225
+  // - Oxylabs: http://user:pass@pr.oxylabs.io:7777
+  // - SmartProxy: http://user:pass@gate.smartproxy.com:7000
+  // - Proxy-Cheap: http://user:pass@rp.proxyscrape.com:6060
+  //
+  // These services auto-rotate IPs on their side (Rotating Residential)
+  proxy: {
+    enabled: getEnvBool('PROXY_ENABLED', false),
+    // Single rotating endpoint (recommended)
+    server: process.env.PROXY_SERVER || null, // e.g., 'http://gate.smartproxy.com:7000'
+    // Authentication (most rotating proxies require this)
+    username: process.env.PROXY_USERNAME || null,
+    password: process.env.PROXY_PASSWORD || null,
+    // Geo-targeting (optional - for Indonesian proxies)
+    country: process.env.PROXY_COUNTRY || 'id', // Indonesia
+    // Session control (some providers support sticky sessions)
+    sessionDuration: getEnvInt('PROXY_SESSION_DURATION', 0), // 0 = rotate every request
+    // Bypass proxy for local resources
+    bypass: process.env.PROXY_BYPASS || 'localhost,127.0.0.1',
+  },
+
   // Queue names
   queues: {
     scrapeJobs: 'scrape-jobs',

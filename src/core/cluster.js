@@ -19,6 +19,36 @@ let activePageCount = 0;
 let memoryInterval = null;
 
 /**
+ * Build browser launch arguments including proxy if configured
+ */
+function buildBrowserArgs() {
+  const args = [...config.browser.args];
+
+  // Add proxy argument if enabled
+  if (config.proxy.enabled && config.proxy.server) {
+    // Extract proxy server (without auth, auth is done per-page)
+    let proxyServer = config.proxy.server;
+    
+    // If server has embedded credentials, strip them (we'll use page.authenticate)
+    if (proxyServer.includes('@')) {
+      const url = new URL(proxyServer);
+      proxyServer = `${url.protocol}//${url.host}`;
+    }
+
+    args.push(`--proxy-server=${proxyServer}`);
+    
+    // Bypass proxy for specified hosts
+    if (config.proxy.bypass) {
+      args.push(`--proxy-bypass-list=${config.proxy.bypass}`);
+    }
+
+    logger.info({ proxyServer }, 'Proxy configured for browser');
+  }
+
+  return args;
+}
+
+/**
  * Initialize and return the puppeteer cluster
  * Uses singleton pattern to ensure only one cluster exists
  */
@@ -27,8 +57,13 @@ export async function getCluster() {
     return clusterInstance;
   }
 
+  const browserArgs = buildBrowserArgs();
+
   logger.info(
-    { maxConcurrency: config.maxConcurrency },
+    { 
+      maxConcurrency: config.maxConcurrency,
+      proxyEnabled: config.proxy.enabled,
+    },
     'Initializing Puppeteer Cluster'
   );
 
@@ -46,7 +81,7 @@ export async function getCluster() {
     // Browser launch options
     puppeteerOptions: {
       headless: config.browser.headless ? 'new' : false,
-      args: config.browser.args,
+      args: browserArgs, // Use args with proxy if configured
       defaultViewport: null, // We'll set this per-page
     },
 
@@ -120,6 +155,17 @@ export async function queueTask(taskFn, data) {
     let pageConfigured = false;
     
     try {
+      // ====== CRITICAL: Authenticate proxy per page ======
+      // With CONCURRENCY_CONTEXT, all tabs share one browser instance
+      // Proxy auth must be done per page, not at browser level
+      if (config.proxy.enabled && config.proxy.username && config.proxy.password) {
+        await page.authenticate({
+          username: config.proxy.username,
+          password: config.proxy.password,
+        });
+        logger.debug('Proxy authentication set for page');
+      }
+
       // Configure page with anti-detection before each task
       await configurePage(page);
       pageConfigured = true;

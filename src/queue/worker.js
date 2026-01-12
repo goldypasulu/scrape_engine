@@ -28,16 +28,47 @@ const activeJobs = new Map();
 
 /**
  * Error classification for smart retry behavior
+ * 
+ * SystemErrors: Should be retried (network, timeout, rate limit)
+ * BusinessErrors: Should NOT be retried (empty result, invalid keyword)
  */
 const ErrorTypes = {
+  // ====== System Errors (RETRY) ======
   TIMEOUT: 'timeout',
   NETWORK: 'network',
   BANNED: 'banned',
   CAPTCHA: 'captcha',
   RATE_LIMITED: 'rate_limited',
   SELECTOR: 'selector',
+  PROXY_ERROR: 'proxy_error',
+  
+  // ====== Business Errors (DO NOT RETRY) ======
+  EMPTY_RESULT: 'empty_result',       // No products found (valid keyword, just no results)
+  INVALID_KEYWORD: 'invalid_keyword', // Bad search term
+  NOT_FOUND: 'not_found',             // 404 page
+  PAGE_ERROR: 'page_error',           // Page returned error content
+  
   UNKNOWN: 'unknown',
 };
+
+/**
+ * Check if error is a business error (should not be retried)
+ */
+function isBusinessError(errorType) {
+  return [
+    ErrorTypes.EMPTY_RESULT,
+    ErrorTypes.INVALID_KEYWORD,
+    ErrorTypes.NOT_FOUND,
+    ErrorTypes.PAGE_ERROR,
+  ].includes(errorType);
+}
+
+/**
+ * Check if error is a system error (should be retried)
+ */
+function isSystemError(errorType) {
+  return !isBusinessError(errorType) && errorType !== ErrorTypes.UNKNOWN;
+}
 
 /**
  * Classify error for retry strategy
@@ -45,16 +76,20 @@ const ErrorTypes = {
 function classifyError(error) {
   const message = error.message?.toLowerCase() || '';
   
+  // System Errors (should retry)
   if (message.includes('timeout') || message.includes('navigation timeout')) {
     return ErrorTypes.TIMEOUT;
   }
   if (message.includes('net::') || message.includes('econnrefused') || message.includes('econnreset')) {
     return ErrorTypes.NETWORK;
   }
+  if (message.includes('proxy') || message.includes('tunnel') || message.includes('authentication required')) {
+    return ErrorTypes.PROXY_ERROR;
+  }
   if (message.includes('403') || message.includes('blocked') || message.includes('banned')) {
     return ErrorTypes.BANNED;
   }
-  if (message.includes('captcha') || message.includes('challenge')) {
+  if (message.includes('captcha') || message.includes('challenge') || message.includes('robot')) {
     return ErrorTypes.CAPTCHA;
   }
   if (message.includes('429') || message.includes('too many requests') || message.includes('rate limit')) {
@@ -62,6 +97,20 @@ function classifyError(error) {
   }
   if (message.includes('selector') || message.includes('element not found')) {
     return ErrorTypes.SELECTOR;
+  }
+  
+  // Business Errors (should NOT retry)
+  if (message.includes('no products found') || message.includes('empty result') || message.includes('0 products')) {
+    return ErrorTypes.EMPTY_RESULT;
+  }
+  if (message.includes('invalid keyword') || message.includes('bad request') || message.includes('invalid search')) {
+    return ErrorTypes.INVALID_KEYWORD;
+  }
+  if (message.includes('404') || message.includes('not found') || message.includes('page not found')) {
+    return ErrorTypes.NOT_FOUND;
+  }
+  if (message.includes('page error') || message.includes('error page') || message.includes('something went wrong')) {
+    return ErrorTypes.PAGE_ERROR;
   }
   
   return ErrorTypes.UNKNOWN;
@@ -183,13 +232,28 @@ async function processJob(job) {
       logger.debug({ error: updateError.message }, 'Failed to update job data');
     }
 
-    // Throw UnrecoverableError for certain error types to skip retries
+    // ====== CRITICAL: Skip retries for business errors ======
+    // Business errors are not transient - retrying won't help
+    const { UnrecoverableError } = await import('bullmq');
+    
+    if (isBusinessError(errorType)) {
+      // Don't retry business errors - they won't succeed on retry
+      logger.info({ 
+        jobId, 
+        errorType, 
+        reason: 'business_error' 
+      }, 'Marking job as failed (no retry for business errors)');
+      
+      throw new UnrecoverableError(`Business error (${errorType}): ${error.message}`);
+    }
+
+    // Throw UnrecoverableError for certain system errors after max retries
     if (errorType === ErrorTypes.BANNED && job.attemptsMade >= 1) {
       // After 2 failed attempts due to ban, stop retrying this URL
-      const { UnrecoverableError } = await import('bullmq');
       throw new UnrecoverableError(`Banned after ${job.attemptsMade + 1} attempts: ${error.message}`);
     }
 
+    // System errors will be retried by BullMQ
     throw error;
 
   } finally {
