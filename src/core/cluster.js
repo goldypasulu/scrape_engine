@@ -68,11 +68,12 @@ export async function getCluster() {
   );
 
   clusterInstance = await Cluster.launch({
-    // Use CONCURRENCY_CONTEXT for isolated browser contexts
-    // More efficient than CONCURRENCY_BROWSER while maintaining isolation
-    concurrency: Cluster.CONCURRENCY_CONTEXT,
+    // Use CONCURRENCY_BROWSER for maximum stability
+    // Each task gets its own browser instance - more stable but uses more resources
+    // This completely avoids the "Requesting main frame too early" race condition
+    concurrency: Cluster.CONCURRENCY_BROWSER,
     
-    // Number of parallel browser contexts
+    // Number of parallel browsers
     maxConcurrency: config.maxConcurrency,
     
     // Use stealth-configured puppeteer
@@ -83,6 +84,8 @@ export async function getCluster() {
       headless: config.browser.headless ? 'new' : false,
       args: browserArgs, // Use args with proxy if configured
       defaultViewport: null, // We'll set this per-page
+      // Use system Chrome if configured (for macOS compatibility)
+      ...(config.browser.executablePath && { executablePath: config.browser.executablePath }),
     },
 
     // Retry configuration

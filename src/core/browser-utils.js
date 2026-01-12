@@ -8,6 +8,36 @@ import { scraperLogger as logger } from '../utils/logger.js';
 import { config } from '../config/index.js';
 
 /**
+ * CRITICAL: Wait for page to be ready before any operation
+ * Fixes "Requesting main frame too early!" error in puppeteer-cluster
+ * 
+ * @param {Page} page 
+ * @param {number} maxRetries 
+ * @param {number} delay 
+ */
+export async function waitForPageReady(page, maxRetries = 10, delay = 300) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      // Check if mainFrame is available
+      const frame = page.mainFrame();
+      if (frame) {
+        // Also check if we can access the frame's url (more complete check)
+        await frame.url();
+        return true;
+      }
+    } catch (err) {
+      if (i === maxRetries - 1) {
+        logger.error({ attempt: i + 1, maxRetries }, 'Page not ready after max retries');
+        return false;
+      }
+      logger.debug({ attempt: i + 1, maxRetries }, 'Waiting for page to be ready');
+    }
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+  return false;
+}
+
+/**
  * Wait for a selector with timeout, returns null if not found
  * @param {Page} page 
  * @param {string} selector 
@@ -58,12 +88,38 @@ export async function humanClick(page, selector) {
 
 /**
  * Navigate to URL with retry and wait for load
+ * Handles "Requesting main frame too early" error from puppeteer-cluster
+ * 
  * @param {Page} page 
  * @param {string} url 
  */
 export async function navigateTo(page, url) {
   logger.info({ url }, 'Navigating to URL');
   
+  // Wait for page to be ready - handles puppeteer-cluster race condition
+  // "Requesting main frame too early!" error occurs when page isn't initialized
+  let retries = 0;
+  const maxRetries = 5;
+  
+  while (retries < maxRetries) {
+    try {
+      // Check if page has mainFrame before proceeding
+      const mainFrame = page.mainFrame();
+      if (!mainFrame) {
+        throw new Error('Main frame not available');
+      }
+      break;
+    } catch (err) {
+      retries++;
+      if (retries >= maxRetries) {
+        throw new Error(`Page not ready after ${maxRetries} attempts: ${err.message}`);
+      }
+      logger.debug({ attempt: retries }, 'Waiting for page to be ready');
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  
+  // Now safe to navigate
   await page.goto(url, {
     waitUntil: 'networkidle2',
     timeout: config.timeouts.navigation,

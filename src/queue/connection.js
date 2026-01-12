@@ -52,8 +52,7 @@ function createConnectionOptions(name = 'default') {
     enableReadyCheck: true,
     enableOfflineQueue: true,
     connectTimeout: 10000,
-    disconnectTimeout: 5000,
-    commandTimeout: 5000,
+    // NOTE: Do NOT set commandTimeout - BullMQ uses BLPOP which blocks for extended periods
     retryStrategy: (times) => {
       if (times > 10) {
         logger.error({ retryCount: times, name }, 'Redis connection failed after max retries');

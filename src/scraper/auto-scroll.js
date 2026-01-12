@@ -11,6 +11,15 @@
 import { randomInt, randomDelay, sleep } from '../utils/delay.js';
 import { config } from '../config/index.js';
 import { scraperLogger as logger } from '../utils/logger.js';
+import { waitForPageReady } from '../core/browser-utils.js';
+
+/**
+ * Safe page.evaluate wrapper that waits for page to be ready
+ */
+async function safeEvaluate(page, fn, ...args) {
+  await waitForPageReady(page);
+  return page.evaluate(fn, ...args);
+}
 
 /**
  * Wait for new DOM elements to appear after scroll
@@ -26,6 +35,9 @@ async function waitForNewElements(page, selector, previousCount, timeout = 5000)
   const startTime = Date.now();
   
   try {
+    // Wait for page to be ready before evaluating
+    await waitForPageReady(page);
+    
     const result = await page.evaluate(async (sel, prevCount, timeoutMs) => {
       return new Promise((resolve) => {
         const checkCount = () => document.querySelectorAll(sel).length;
@@ -61,8 +73,12 @@ async function waitForNewElements(page, selector, previousCount, timeout = 5000)
     return result;
   } catch (error) {
     logger.debug({ error: error.message }, 'waitForNewElements error');
-    const count = await page.evaluate((sel) => document.querySelectorAll(sel).length, selector);
-    return { newCount: count, increased: count > previousCount };
+    try {
+      const count = await safeEvaluate(page, (sel) => document.querySelectorAll(sel).length, selector);
+      return { newCount: count, increased: count > previousCount };
+    } catch {
+      return { newCount: previousCount, increased: false };
+    }
   }
 }
 
@@ -71,7 +87,7 @@ async function waitForNewElements(page, selector, previousCount, timeout = 5000)
  * More reliable than just checking scroll height
  */
 async function isAtPageBottom(page) {
-  return page.evaluate(() => {
+  return safeEvaluate(page, () => {
     const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
     const scrollHeight = document.documentElement.scrollHeight;
     const clientHeight = document.documentElement.clientHeight;
@@ -85,7 +101,7 @@ async function isAtPageBottom(page) {
  * Get current scroll metrics
  */
 async function getScrollMetrics(page) {
-  return page.evaluate(() => ({
+  return safeEvaluate(page, () => ({
     scrollTop: window.pageYOffset || document.documentElement.scrollTop,
     scrollHeight: document.documentElement.scrollHeight,
     clientHeight: document.documentElement.clientHeight,

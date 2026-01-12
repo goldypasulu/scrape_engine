@@ -77,6 +77,10 @@ export const config = {
   // Browser settings
   browser: {
     headless: getEnvBool('HEADLESS', true),
+    // Use system Chrome if CHROME_EXECUTABLE_PATH is set
+    // On Mac: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+    // On Linux: '/usr/bin/google-chrome'
+    executablePath: process.env.CHROME_EXECUTABLE_PATH || undefined,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
