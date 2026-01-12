@@ -35,3 +35,7 @@ build/
 # Chrome/Puppeteer
 .local-chromium/
 puppeteer_dev_profile/
+chrome-profile/
+*.json
+*.html
+*.png

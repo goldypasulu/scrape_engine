@@ -9,6 +9,7 @@
  */
 
 import { Cluster } from 'puppeteer-cluster';
+import path from 'path';
 import { getPuppeteer, configurePage, verifyStealthConfiguration } from './stealth.js';
 import { config, logMemoryUsage } from '../config/index.js';
 import { logger } from '../utils/logger.js';
@@ -83,6 +84,7 @@ export async function getCluster() {
     puppeteerOptions: {
       headless: config.browser.headless ? 'new' : false,
       args: browserArgs, // Use args with proxy if configured
+      userDataDir: path.resolve('./chrome-profile'), // Use persistent profile for login state
       defaultViewport: null, // We'll set this per-page
       // Use system Chrome if configured (for macOS compatibility)
       ...(config.browser.executablePath && { executablePath: config.browser.executablePath }),

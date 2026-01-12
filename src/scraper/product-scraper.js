@@ -18,225 +18,194 @@ import { scraperLogger as logger } from '../utils/logger.js';
  * @param {Object} jobData - Job data from queue
  * @returns {Object} - Scraping results
  */
+/**
+ * Scrape products from a search URL
+ * @param {Page} page - Puppeteer page object
+ * @param {Object} jobData - Job data from queue
+ * @returns {Object} - Scraping results
+ */
 export async function scrapeProducts(page, jobData) {
   const { url, keyword, maxPages = config.scraper.maxPagesPerJob } = jobData;
-  
   const startTime = Date.now();
-  const allProducts = [];
-  let currentPage = 1;
-  let currentUrl = url || buildSearchUrl(keyword);
+  
+  // Use keyword to build URL if url is not provided
+  const targetUrl = url || `https://www.tokopedia.com/search?st=product&q=${encodeURIComponent(keyword)}`;
 
-  logger.info({ url: currentUrl, keyword, maxPages }, 'Starting product scrape');
+  logger.info({ targetUrl, keyword, maxPages }, 'Starting optimized product scrape');
 
-  while (currentPage <= maxPages) {
-    logger.info({ currentPage, maxPages, url: currentUrl }, 'Scraping page');
-
-    try {
-      // Navigate to page with retry
-      await retryWithBackoff(
-        async () => {
-          await navigateTo(page, currentUrl);
-        },
-        {
-          ...RetryStrategies.fast,
-          onRetry: async (error) => {
-            if (error.message.includes('net::')) {
-              await longPause();
-            }
-          },
-        }
-      );
-
-      // Wait for product cards to appear
-      const hasProducts = await waitForSelectorSafe(
-        page,
-        SELECTORS.productCard.primary,
-        config.timeouts.selector
-      );
-
-      if (!hasProducts) {
-        logger.warn({ currentPage }, 'No product cards found on page');
-        
-        // Try fallback selectors
-        for (const fallback of SELECTORS.productCard.fallbacks) {
-          if (await waitForSelectorSafe(page, fallback, 5000)) {
-            logger.info({ fallback }, 'Found products with fallback selector');
-            break;
-          }
-        }
-      }
-
-      // Human-like delay before scrolling
-      await humanDelay();
-
-      // Scroll to load all lazy-loaded products
-      // CRITICAL: Using itemSelector for DOM-based detection, NOT scroll height
-      const scrollStats = await autoScroll(page, {
-        itemSelector: SELECTORS.productCard.primary,  // Required for reliable detection
-        maxScrolls: 30,
-        minItems: 20,           // Stop early if we have enough items
-        maxStallCount: 5,       // Retry up to 5 times when lazy-load stalls
-        itemWaitTimeout: 5000,  // Wait up to 5s for new items per scroll
-      });
-
-      logger.info(
-        { 
-          currentPage, 
-          finalItemCount: scrollStats.finalItemCount, 
-          scrollCount: scrollStats.scrollCount,
-          stallsEncountered: scrollStats.stallsEncountered,
-        },
-        'Scroll completed'
-      );
-
-      // Extract HTML content
-      const html = await getPageContent(page);
-
-      // Parse products using cheerio
-      const products = parseProductCards(html);
-      
-      logger.info(
-        { currentPage, productsFound: products.length },
-        'Products extracted from page'
-      );
-
-      // Add page metadata
-      products.forEach((product) => {
-        product.sourcePage = currentPage;
-        product.sourceUrl = currentUrl;
-        product.keyword = keyword;
-      });
-
-      allProducts.push(...products);
-
-      // Check for next page
-      const hasNextPage = await checkNextPage(page);
-      
-      if (!hasNextPage || currentPage >= maxPages) {
-        logger.info({ currentPage, reason: hasNextPage ? 'max_pages' : 'no_next_page' }, 'Stopping pagination');
-        break;
-      }
-
-      // Get next page URL
-      currentUrl = await getNextPageUrl(page, currentUrl, currentPage + 1);
-      currentPage++;
-
-      // Human-like delay between pages
-      await humanDelay();
-      await humanDelay(); // Extra delay between pages
-
-    } catch (error) {
-      logger.error(
-        { currentPage, error: error.message, stack: error.stack },
-        'Error scraping page'
-      );
-
-      if (isRetryableError(error)) {
-        await longPause();
-        // Don't increment page, try again
-        continue;
-      }
-
-      // Non-retryable error, move to next page
-      currentPage++;
-    }
+  try {
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  } catch (err) {
+    logger.error({ err }, 'Navigation failed');
+    throw err;
   }
 
-  const duration = Date.now() - startTime;
+  // --- HYBRID PAGINATION (Scroll + Click) ---
+  const allProducts = [];
+  let keepGoing = true;
+  let totalScrolls = 0;
+  const startTimeLoop = Date.now();
 
-  const result = {
-    success: true,
-    keyword,
-    totalProducts: allProducts.length,
-    pagesScraped: currentPage,
-    duration,
-    products: allProducts,
-    scrapedAt: new Date().toISOString(),
-  };
+  while (keepGoing) {
+      // Safety timeout (e.g. 5 minutes max per job)
+      if (Date.now() - startTimeLoop > 300000) {
+          logger.warn('Job time limit reached.');
+          break;
+      }
+
+      // 1. Scroll Phase (Trigger auto-loads)
+      logger.info({ totalScrolls }, 'Cycling scroll to trigger auto-load');
+      
+      const initialHeight = await page.evaluate(() => document.body.scrollHeight);
+      
+      // Scroll 5 times to trigger lazy loads
+      for (let i = 0; i < 5; i++) {
+          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+          await new Promise(r => setTimeout(r, 2000));
+      }
+      
+      await new Promise(r => setTimeout(r, 2000)); // Stabilize
+
+      // 2. Button Phase (Look for "Muat Lebih Banyak")
+      const buttonFound = await page.evaluate(async () => {
+          const buttons = Array.from(document.querySelectorAll('button'));
+          const btn = buttons.find(b => 
+              (b.textContent.includes('Muat') && b.textContent.includes('Lebih')) || 
+              b.textContent.toLowerCase().includes('load more')
+          );
+          
+          if (btn && btn.offsetParent !== null) {
+              btn.scrollIntoView({ block: 'center', behavior: 'smooth' });
+              return true;
+          }
+          return false;
+      });
+
+      if (buttonFound) {
+            logger.info('Found Load More button. Clicking...');
+           
+           try {
+              const [btn] = await page.$x("//button[contains(., 'Muat') or contains(., 'Load')]");
+              if (btn) {
+                  await btn.click();
+                  await new Promise(r => setTimeout(r, 5000)); // Wait for content load
+              }
+           } catch (e) {
+               logger.warn({ error: e.message }, 'Failed to click Load More button');
+               // Don't stop, maybe just a glitch, try scrolling again
+           }
+      } else {
+          // Check if we reached bottom
+          const finalHeight = await page.evaluate(() => document.body.scrollHeight);
+          if (Math.abs(finalHeight - initialHeight) < 100) { // Height stuck
+             logger.info('Page height unchanging. Assuming end of results.');
+             keepGoing = false;
+          }
+      }
+      
+      totalScrolls++;
+      // Limit total cycles (each cycle is ~15-20s, 20 cycles ~ 5-6 mins)
+      if (totalScrolls > 25) { 
+          logger.info('Max scroll cycles reached');
+          keepGoing = false; 
+      }
+  }
+
+  // --- TEXT NODE EXTRACTION (Proven Strategy) ---
+  logger.info('Extracting products from DOM...');
+  
+  const products = await page.evaluate(() => {
+      const items = [];
+      const processedNodes = new Set();
+      
+      const findLink = (el) => {
+           while(el && el.tagName !== 'BODY') {
+               if(el.tagName === 'A') return el;
+               el = el.parentElement;
+           }
+           return null;
+      };
+
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+      let node;
+
+      while(node = walker.nextNode()) {
+          const text = node.textContent.trim();
+          if (text.match(/^Rp\s*[\d.]+/)) {
+              const el = node.parentElement;
+              let link = findLink(el);
+              
+              if (!link) {
+                 let parent = el.parentElement; 
+                 // Heuristic: search siblings/parents for link
+                 for(let i=0; i<5; i++) {
+                     if(!parent) break;
+                     const l = parent.querySelector('a');
+                     if(l) { link = l; break; }
+                     parent = parent.parentElement;
+                 }
+              }
+
+              if (link && !processedNodes.has(link.href)) {
+                  processedNodes.add(link.href);
+                  // Filter valid product links
+                  if (link.href.includes('tautan.tokopedia.com') || link.href.includes('tokopedia.com/')) {
+                      let name = link.textContent.trim();
+                      if(name.length > 200) name = name.substring(0, 200) + '...';
+                      
+                      const cleanPrice = parseInt(text.replace(/\D/g, ''));
+                      
+                      items.push({
+                          name: name.split('\n').filter(l => l.length > 5)[0] || name,
+                          priceText: text,
+                          price: cleanPrice,
+                          productUrl: link.href,
+                          shopName: 'N/A', // Hard to get reliably with generic strategy
+                          rating: null,
+                          soldCount: null
+                      });
+                  }
+              }
+          }
+      }
+      return items;
+  });
+
+  // Deduplicate and cleanup
+  const uniqueMap = new Map();
+  products.forEach(p => {
+      if (p.price > 100) { // Filter zero/bad prices
+        uniqueMap.set(p.productUrl, p);
+      }
+  });
+  
+  const finalProducts = Array.from(uniqueMap.values());
+  const duration = Date.now() - startTime;
 
   logger.info(
     { 
-      totalProducts: allProducts.length, 
-      pagesScraped: currentPage,
+      totalProducts: finalProducts.length, 
       duration: `${(duration / 1000).toFixed(1)}s`,
     },
-    'Scraping completed'
+    'Scraping completed successfully'
   );
 
-  return result;
+  return {
+    success: true,
+    keyword,
+    totalProducts: finalProducts.length,
+    pagesScraped: 1, // We treat infinite scroll as 1 massive page
+    duration,
+    products: finalProducts,
+    scrapedAt: new Date().toISOString(),
+  };
 }
 
 /**
  * Build Tokopedia search URL from keyword
- * @param {string} keyword 
- * @param {number} page 
  */
-export function buildSearchUrl(keyword, page = 1) {
-  const encodedKeyword = encodeURIComponent(keyword);
-  const baseUrl = 'https://www.tokopedia.com/search';
-  
-  if (page > 1) {
-    return `${baseUrl}?q=${encodedKeyword}&page=${page}`;
-  }
-  
-  return `${baseUrl}?q=${encodedKeyword}`;
-}
-
-/**
- * Check if there's a next page
- * @param {Page} page 
- */
-async function checkNextPage(page) {
-  try {
-    // Check for "Load More" button or pagination
-    const selectors = [
-      SELECTORS.loadMore.primary,
-      ...SELECTORS.loadMore.fallbacks,
-      'a[data-testid="btnSRPNextPage"]',
-      'button[aria-label="Next page"]',
-    ];
-
-    for (const selector of selectors) {
-      const element = await page.$(selector);
-      if (element) {
-        const isDisabled = await page.evaluate((el) => {
-          return el.disabled || el.classList.contains('disabled');
-        }, element);
-        
-        if (!isDisabled) {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Get the URL for the next page
- * @param {Page} page 
- * @param {string} currentUrl 
- * @param {number} nextPage 
- */
-async function getNextPageUrl(page, currentUrl, nextPage) {
-  // Try to get next page link from the page
-  try {
-    const nextLink = await page.$eval(
-      'a[data-testid="btnSRPNextPage"]',
-      (el) => el.href
-    );
-    if (nextLink) return nextLink;
-  } catch {
-    // Fall through to URL manipulation
-  }
-
-  // Build URL with page parameter
-  const url = new URL(currentUrl);
-  url.searchParams.set('page', nextPage.toString());
-  return url.toString();
+export function buildSearchUrl(keyword) {
+  return `https://www.tokopedia.com/search?st=product&q=${encodeURIComponent(keyword)}`;
 }
 
 export default {
