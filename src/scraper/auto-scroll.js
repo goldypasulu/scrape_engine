@@ -1,13 +1,11 @@
 /**
- * Human-Like Auto Scroll
- * Critical for loading lazy-loaded content on infinite scroll pages
+ * Human-Like Auto Scroll - HARDENED VERSION
  * 
- * This implementation mimics human scrolling behavior with:
- * - Variable scroll distances (NOT full viewport jumps)
- * - Smooth scrolling animation
- * - Random pauses between scrolls
- * - Occasional longer "reading" pauses
- * - Smart detection when no more content loads
+ * Critical fixes:
+ * 1. Primary detection is now DOM element count, NOT scroll height
+ * 2. Active wait for new elements with mutation observer
+ * 3. Handles lazy-load stalls with retry logic
+ * 4. Smart backoff when content stops loading
  */
 
 import { randomInt, randomDelay, sleep } from '../utils/delay.js';
@@ -15,7 +13,92 @@ import { config } from '../config/index.js';
 import { scraperLogger as logger } from '../utils/logger.js';
 
 /**
+ * Wait for new DOM elements to appear after scroll
+ * Uses MutationObserver for reliable detection
+ * 
+ * @param {Page} page 
+ * @param {string} selector - CSS selector for items to count
+ * @param {number} previousCount - Count before scrolling
+ * @param {number} timeout - Max wait time in ms
+ * @returns {Promise<{newCount: number, increased: boolean}>}
+ */
+async function waitForNewElements(page, selector, previousCount, timeout = 5000) {
+  const startTime = Date.now();
+  
+  try {
+    const result = await page.evaluate(async (sel, prevCount, timeoutMs) => {
+      return new Promise((resolve) => {
+        const checkCount = () => document.querySelectorAll(sel).length;
+        let currentCount = checkCount();
+        
+        // If already increased, return immediately
+        if (currentCount > prevCount) {
+          return resolve({ newCount: currentCount, increased: true });
+        }
+
+        // Set up mutation observer for DOM changes
+        const observer = new MutationObserver(() => {
+          currentCount = checkCount();
+          if (currentCount > prevCount) {
+            observer.disconnect();
+            resolve({ newCount: currentCount, increased: true });
+          }
+        });
+
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true,
+        });
+
+        // Timeout fallback
+        setTimeout(() => {
+          observer.disconnect();
+          resolve({ newCount: checkCount(), increased: checkCount() > prevCount });
+        }, timeoutMs);
+      });
+    }, selector, previousCount, timeout);
+
+    return result;
+  } catch (error) {
+    logger.debug({ error: error.message }, 'waitForNewElements error');
+    const count = await page.evaluate((sel) => document.querySelectorAll(sel).length, selector);
+    return { newCount: count, increased: count > previousCount };
+  }
+}
+
+/**
+ * Check if the page has reached the absolute bottom
+ * More reliable than just checking scroll height
+ */
+async function isAtPageBottom(page) {
+  return page.evaluate(() => {
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    const scrollHeight = document.documentElement.scrollHeight;
+    const clientHeight = document.documentElement.clientHeight;
+    
+    // Consider "at bottom" if within 100px of the end
+    return scrollTop + clientHeight >= scrollHeight - 100;
+  });
+}
+
+/**
+ * Get current scroll metrics
+ */
+async function getScrollMetrics(page) {
+  return page.evaluate(() => ({
+    scrollTop: window.pageYOffset || document.documentElement.scrollTop,
+    scrollHeight: document.documentElement.scrollHeight,
+    clientHeight: document.documentElement.clientHeight,
+    bodyHeight: document.body.scrollHeight,
+  }));
+}
+
+/**
  * Perform human-like scrolling to load lazy content
+ * 
+ * CRITICAL: This version prioritizes DOM element count over scroll height
+ * to handle lazy-load stalls properly
+ * 
  * @param {Page} page - Puppeteer page object
  * @param {Object} options - Scroll configuration
  * @returns {Object} - Scroll statistics
@@ -36,23 +119,46 @@ export async function autoScroll(page, options = {}) {
       min: config.scroll.pauseMin,
       max: config.scroll.pauseMax,
     },
-    targetSelector = null, // Optional: stop when this selector count doesn't increase
-    minItems = 0, // Minimum items to load before stopping
+    // REQUIRED: Selector for items to count (e.g., product cards)
+    itemSelector,
+    // Minimum items to load before allowing exit
+    minItems = 0,
+    // Max consecutive no-new-items before stopping
+    maxStallCount = 5,
+    // Wait time for new items after each scroll
+    itemWaitTimeout = 5000,
   } = options;
 
-  logger.info({ maxScrolls, scrollIncrement, scrollDelay }, 'Starting auto-scroll');
+  if (!itemSelector) {
+    logger.warn('No itemSelector provided - using scroll height only (less reliable)');
+  }
 
-  let previousHeight = 0;
+  logger.info({ 
+    maxScrolls, 
+    itemSelector,
+    minItems,
+    maxStallCount,
+  }, 'Starting hardened auto-scroll');
+
   let scrollCount = 0;
-  let noNewContentCount = 0;
+  let stallCount = 0;
   let previousItemCount = 0;
-  const maxNoNewContent = 3; // Stop after 3 consecutive no-content checks
+  let previousHeight = 0;
 
   // Get initial state
-  const initialHeight = await page.evaluate(() => document.body.scrollHeight);
-  const viewportHeight = await page.evaluate(() => window.innerHeight);
+  if (itemSelector) {
+    previousItemCount = await page.evaluate(
+      (sel) => document.querySelectorAll(sel).length, 
+      itemSelector
+    );
+  }
+  const initialMetrics = await getScrollMetrics(page);
+  previousHeight = initialMetrics.scrollHeight;
 
-  logger.debug({ initialHeight, viewportHeight }, 'Initial page state');
+  logger.debug({ 
+    initialItemCount: previousItemCount, 
+    initialHeight: previousHeight,
+  }, 'Initial page state');
 
   while (scrollCount < maxScrolls) {
     // Random scroll distance (variable, not full viewport)
@@ -66,118 +172,166 @@ export async function autoScroll(page, options = {}) {
       });
     }, scrollDistance);
 
-    // Random delay between scrolls
+    // Wait for scroll animation to complete
+    await sleep(300);
+
+    // Random delay between scrolls (human-like)
     await randomDelay(scrollDelay.min, scrollDelay.max);
 
-    // Occasionally pause longer (mimics human reading)
+    // Occasionally pause longer (mimics human reading) - 15% chance
     if (Math.random() < pauseProbability) {
       logger.debug({ scrollCount }, 'Taking reading pause');
       await randomDelay(pauseDuration.min, pauseDuration.max);
     }
 
-    // Occasionally scroll up slightly (very human-like)
+    // Occasionally scroll up slightly (very human-like) - 5% chance
     if (Math.random() < 0.05) {
       const scrollUp = randomInt(50, 150);
       await page.evaluate((distance) => {
         window.scrollBy({ top: -distance, behavior: 'smooth' });
       }, scrollUp);
+      await sleep(300);
       await randomDelay(300, 600);
     }
 
-    // Wait for potential lazy-load to complete
-    await sleep(500);
+    // ========== CRITICAL: Wait for and detect new items ==========
+    let hasNewContent = false;
+    let currentItemCount = previousItemCount;
 
-    // Check current state
-    const currentHeight = await page.evaluate(() => document.body.scrollHeight);
-    const currentScroll = await page.evaluate(
-      () => window.scrollY + window.innerHeight
-    );
+    if (itemSelector) {
+      // Wait for new DOM elements using MutationObserver
+      const result = await waitForNewElements(
+        page, 
+        itemSelector, 
+        previousItemCount, 
+        itemWaitTimeout
+      );
+      
+      currentItemCount = result.newCount;
+      hasNewContent = result.increased;
 
-    // Check if we've reached the bottom
-    const atBottom = currentScroll >= currentHeight - 100;
-
-    // Check if target selector count increased
-    let currentItemCount = 0;
-    if (targetSelector) {
-      currentItemCount = await page.evaluate((selector) => {
-        return document.querySelectorAll(selector).length;
-      }, targetSelector);
+      if (hasNewContent) {
+        logger.debug({ 
+          scrollCount, 
+          newItems: currentItemCount - previousItemCount,
+          totalItems: currentItemCount,
+        }, 'New items loaded');
+      }
+    } else {
+      // Fallback: check scroll height (less reliable)
+      await sleep(1000); // Give time for content to load
+      const currentMetrics = await getScrollMetrics(page);
+      hasNewContent = currentMetrics.scrollHeight > previousHeight;
+      previousHeight = currentMetrics.scrollHeight;
     }
 
-    // Determine if new content loaded
-    const heightIncreased = currentHeight > previousHeight;
-    const itemsIncreased = targetSelector ? currentItemCount > previousItemCount : false;
-    const hasNewContent = heightIncreased || itemsIncreased;
+    // Check stall condition
+    const atBottom = await isAtPageBottom(page);
 
-    if (!hasNewContent && atBottom) {
-      noNewContentCount++;
-      logger.debug(
-        { noNewContentCount, maxNoNewContent, currentHeight },
-        'No new content detected'
-      );
+    if (!hasNewContent) {
+      stallCount++;
+      
+      logger.debug({ 
+        stallCount, 
+        maxStallCount, 
+        atBottom,
+        currentItemCount,
+      }, 'No new content detected');
 
-      if (noNewContentCount >= maxNoNewContent) {
-        logger.info(
-          { scrollCount, reason: 'no_new_content' },
-          'Stopping scroll: no new content after multiple attempts'
-        );
+      // If at bottom with no new content, try harder before giving up
+      if (atBottom && stallCount >= 2) {
+        // Try scrolling to absolute bottom
+        await page.evaluate(() => {
+          window.scrollTo({
+            top: document.documentElement.scrollHeight,
+            behavior: 'smooth',
+          });
+        });
+        await sleep(1000);
+        
+        // Wait longer for lazy content
+        if (itemSelector) {
+          const result = await waitForNewElements(
+            page, 
+            itemSelector, 
+            previousItemCount, 
+            itemWaitTimeout * 2
+          );
+          if (result.increased) {
+            currentItemCount = result.newCount;
+            hasNewContent = true;
+            stallCount = 0;
+            logger.debug({ newItems: result.newCount - previousItemCount }, 'Late items loaded after retry');
+          }
+        }
+      }
+
+      // Exit conditions
+      if (stallCount >= maxStallCount) {
+        logger.info({ 
+          scrollCount, 
+          reason: 'max_stall_reached',
+          finalItemCount: currentItemCount,
+        }, 'Stopping scroll: no new content after multiple attempts');
         break;
       }
 
-      // Wait a bit longer in case content is still loading
+      // Extra wait when stalling
       await randomDelay(1500, 2500);
     } else {
-      noNewContentCount = 0;
+      // Reset stall counter on successful content load
+      stallCount = 0;
     }
 
     // Check minimum items requirement
-    if (targetSelector && currentItemCount >= minItems && minItems > 0) {
-      logger.info(
-        { scrollCount, itemCount: currentItemCount, minItems },
-        'Stopping scroll: minimum items reached'
-      );
+    if (minItems > 0 && currentItemCount >= minItems) {
+      logger.info({ 
+        scrollCount, 
+        itemCount: currentItemCount, 
+        minItems,
+      }, 'Stopping scroll: minimum items reached');
       break;
     }
 
-    previousHeight = currentHeight;
     previousItemCount = currentItemCount;
     scrollCount++;
 
     // Log progress periodically
-    if (scrollCount % 10 === 0) {
-      logger.debug(
-        { scrollCount, currentHeight, itemCount: currentItemCount },
-        'Scroll progress'
-      );
+    if (scrollCount % 5 === 0) {
+      const metrics = await getScrollMetrics(page);
+      logger.debug({ 
+        scrollCount, 
+        itemCount: currentItemCount,
+        scrollHeight: metrics.scrollHeight,
+        scrollPosition: `${Math.round((metrics.scrollTop + metrics.clientHeight) / metrics.scrollHeight * 100)}%`,
+      }, 'Scroll progress');
     }
   }
 
   // Get final stats
-  const finalHeight = await page.evaluate(() => document.body.scrollHeight);
-  const finalItemCount = targetSelector
-    ? await page.evaluate(
-        (selector) => document.querySelectorAll(selector).length,
-        targetSelector
-      )
+  const finalMetrics = await getScrollMetrics(page);
+  const finalItemCount = itemSelector 
+    ? await page.evaluate((sel) => document.querySelectorAll(sel).length, itemSelector)
     : null;
 
   const stats = {
     scrollCount,
-    initialHeight,
-    finalHeight,
-    heightIncrease: finalHeight - initialHeight,
-    itemCount: finalItemCount,
+    initialHeight: initialMetrics.scrollHeight,
+    finalHeight: finalMetrics.scrollHeight,
+    heightIncrease: finalMetrics.scrollHeight - initialMetrics.scrollHeight,
+    initialItemCount: previousItemCount,
+    finalItemCount,
+    itemsLoaded: finalItemCount ? finalItemCount - (options.itemSelector ? previousItemCount : 0) : null,
+    stallsEncountered: stallCount,
   };
 
-  logger.info(stats, 'Auto-scroll completed');
+  logger.info(stats, 'Hardened auto-scroll completed');
 
   return stats;
 }
 
 /**
  * Scroll to reveal a specific element
- * @param {Page} page 
- * @param {string} selector 
  */
 export async function scrollToElement(page, selector) {
   const element = await page.$(selector);
@@ -199,7 +353,6 @@ export async function scrollToElement(page, selector) {
 
 /**
  * Scroll to top of page
- * @param {Page} page 
  */
 export async function scrollToTop(page) {
   await page.evaluate(() => {
@@ -208,8 +361,35 @@ export async function scrollToTop(page) {
   await randomDelay(500, 1000);
 }
 
+/**
+ * Scroll to load at least N items
+ * Convenience wrapper around autoScroll
+ */
+export async function scrollUntilItemCount(page, itemSelector, targetCount, maxScrolls = 100) {
+  logger.info({ itemSelector, targetCount }, 'Scrolling until target item count');
+  
+  const currentCount = await page.evaluate(
+    (sel) => document.querySelectorAll(sel).length, 
+    itemSelector
+  );
+
+  if (currentCount >= targetCount) {
+    logger.info({ currentCount, targetCount }, 'Target already met, no scrolling needed');
+    return { scrollCount: 0, finalItemCount: currentCount };
+  }
+
+  return autoScroll(page, {
+    itemSelector,
+    minItems: targetCount,
+    maxScrolls,
+    maxStallCount: 5,
+  });
+}
+
 export default {
   autoScroll,
   scrollToElement,
   scrollToTop,
+  scrollUntilItemCount,
+  waitForNewElements,
 };

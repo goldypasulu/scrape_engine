@@ -70,14 +70,22 @@ export async function scrapeProducts(page, jobData) {
       await humanDelay();
 
       // Scroll to load all lazy-loaded products
+      // CRITICAL: Using itemSelector for DOM-based detection, NOT scroll height
       const scrollStats = await autoScroll(page, {
-        targetSelector: SELECTORS.productCard.primary,
+        itemSelector: SELECTORS.productCard.primary,  // Required for reliable detection
         maxScrolls: 30,
-        minItems: 20, // Try to load at least 20 items
+        minItems: 20,           // Stop early if we have enough items
+        maxStallCount: 5,       // Retry up to 5 times when lazy-load stalls
+        itemWaitTimeout: 5000,  // Wait up to 5s for new items per scroll
       });
 
       logger.info(
-        { currentPage, itemCount: scrollStats.itemCount, scrollCount: scrollStats.scrollCount },
+        { 
+          currentPage, 
+          finalItemCount: scrollStats.finalItemCount, 
+          scrollCount: scrollStats.scrollCount,
+          stallsEncountered: scrollStats.stallsEncountered,
+        },
         'Scroll completed'
       );
 

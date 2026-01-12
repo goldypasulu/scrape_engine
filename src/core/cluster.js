@@ -4,11 +4,12 @@
  */
 
 import { Cluster } from 'puppeteer-cluster';
-import { getPuppeteer, configurePage } from './stealth.js';
+import { getPuppeteer, configurePage, verifyStealthConfiguration } from './stealth.js';
 import { config, logMemoryUsage } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 
 let clusterInstance = null;
+let stealthVerified = false;
 
 /**
  * Initialize and return the puppeteer cluster
@@ -99,6 +100,17 @@ export async function queueTask(taskFn, data) {
   return cluster.execute(data, async ({ page, data: taskData }) => {
     // Configure page with anti-detection before each task
     await configurePage(page);
+    
+    // Verify stealth configuration on first task (once per session)
+    if (!stealthVerified) {
+      const { passed, results } = await verifyStealthConfiguration(page);
+      stealthVerified = true;
+      
+      if (!passed) {
+        logger.warn({ results }, 'Stealth verification failed - detection may occur');
+      }
+    }
+    
     return taskFn(page, taskData);
   });
 }
