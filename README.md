@@ -8,8 +8,10 @@ A production-grade, undetectable scraping engine specifically designed for Tokop
 - 🔄 **User Agent Rotation**: 20+ modern user agents with viewport matching
 - 🐌 **Human-Like Behavior**: Random delays, variable scroll speeds, reading pauses
 - 📜 **Smart Infinite Scroll**: Triggers lazy-loading without triggering bot detection
-- 🎯 **Resilient Selectors**: Uses stable `data-testid` attributes with fallback chains
+- 🔍 **Detail Page Scraping**: Navigate to each product page for comprehensive data (rating, sold count, shop info)
+- 🎯 **Resilient Selectors**: Uses TextNode extraction + `data-testid` fallbacks
 - 📊 **Job Queue**: Redis-based BullMQ for scalable job processing
+- 🔐 **Authenticated Session**: Persist login session for accessing restricted content
 - 🔧 **Concurrency Control**: Tunable browser instances and worker counts
 - 📝 **Structured Logging**: Pino-based JSON logging for production use
 
@@ -102,6 +104,34 @@ npm run enqueue -- --bulk keywords.json
 }
 ```
 
+### Manual Runner with Detail Scraping
+
+For quick testing or standalone usage without Redis/queue setup:
+
+```bash
+# Basic usage with keyword
+node manual-run.js "laptop"
+
+# With product limit (default: 20)
+node manual-run.js "iphone 15" 10
+```
+
+**How it works:**
+1. Opens browser with your saved login session
+2. Navigates to Tokopedia search page
+3. Scrolls and clicks "Load More" to collect product URLs
+4. Visits each product detail page to extract comprehensive data
+5. Saves results to `result_<keyword>_detail.json`
+
+**Data extracted per product:**
+- `name` - Product title
+- `price` - Numeric price
+- `rating` - Star rating (1-5)
+- `soldCount` - Number sold (handles "1rb+", "100+" formats)
+- `shopName` - Seller/shop name
+- `shopLocation` - Shop city
+- `productUrl` - Direct product link
+
 ### Programmatic Usage
 
 ```javascript
@@ -170,6 +200,7 @@ scrape_engine/
 │   ├── scraper/
 │   │   ├── auto-scroll.js    # Human-like scrolling
 │   │   ├── dom-selector.js   # Resilient selectors
+│   │   ├── detail-scraper.js # Detail page extraction (NEW)
 │   │   └── product-scraper.js # Main scraping logic
 │   ├── parser/
 │   │   ├── html-parser.js    # Cheerio extraction
