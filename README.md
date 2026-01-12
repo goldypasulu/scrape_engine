@@ -1,271 +1,115 @@
 # Tokopedia Scrape Engine
 
-A production-grade, undetectable scraping engine specifically designed for Tokopedia (Indonesian E-commerce) with aggressive anti-bot protections.
+Scraping engine untuk Tokopedia dengan fitur anti-detection dan detail page scraping.
 
 ## Features
 
-- 🛡️ **Stealth Mode**: puppeteer-extra-plugin-stealth with additional anti-detection measures
-- 🔄 **User Agent Rotation**: 20+ modern user agents with viewport matching
-- 🐌 **Human-Like Behavior**: Random delays, variable scroll speeds, reading pauses
-- 📜 **Smart Infinite Scroll**: Triggers lazy-loading without triggering bot detection
-- 🔍 **Detail Page Scraping**: Navigate to each product page for comprehensive data (rating, sold count, shop info)
-- 🎯 **Resilient Selectors**: Uses TextNode extraction + `data-testid` fallbacks
-- 📊 **Job Queue**: Redis-based BullMQ for scalable job processing
-- 🔐 **Authenticated Session**: Persist login session for accessing restricted content
-- 🔧 **Concurrency Control**: Tunable browser instances and worker counts
-- 📝 **Structured Logging**: Pino-based JSON logging for production use
+- 🔍 **Detail Page Scraping**: Navigasi ke setiap halaman produk untuk data lengkap (rating, sold count, shop info)
+- 🔐 **Authenticated Session**: Menyimpan session login untuk akses konten terbatas
+- 📜 **Smart Infinite Scroll**: Auto-scroll + klik "Load More" untuk mengambil semua produk
+- 💾 **Incremental Save**: Setiap produk langsung disimpan (tidak hilang jika terputus)
+- 🔄 **Resume Mode**: Melanjutkan dari file yang sudah ada (tidak duplikat)
 
 ## Prerequisites
 
 - Node.js >= 18.0.0
-- Redis server (for BullMQ job queue)
+- Google Chrome (untuk macOS)
 
 ## Installation
 
 ```bash
-# Clone the repository
 cd scrape_engine
-
-# Install dependencies
 npm install
-
-# Copy environment configuration
-cp .env.example .env
-
-# Edit .env with your Redis configuration
 ```
 
-## Configuration
+## Quick Start
 
-Edit `.env` to configure the engine:
+### 1. Login ke Tokopedia (Sekali Saja)
 
 ```bash
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
-
-# Concurrency (tune based on CPU/RAM)
-MAX_CONCURRENCY=2    # Browser instances
-MAX_WORKERS=3        # Parallel job processing
-
-# Scroll behavior
-SCROLL_DELAY_MIN=800
-SCROLL_DELAY_MAX=2000
-
-# Timeouts
-PAGE_TIMEOUT=60000
+node open-browser.js
 ```
 
-### Concurrency Tuning
+Browser akan terbuka. Login ke akun Tokopedia Anda secara manual, lalu tutup browser.
+Session akan tersimpan di folder `chrome-profile/`.
 
-| Setting | Low Resources | Medium | High Performance |
-|---------|--------------|--------|------------------|
-| `MAX_CONCURRENCY` | 1-2 | 3-4 | 5-8 |
-| `MAX_WORKERS` | 2 | 3-5 | 5-10 |
-| Memory per browser | ~300MB | ~400MB | ~500MB |
-
-## Usage
-
-### Start the Worker
+### 2. Jalankan Scraper
 
 ```bash
-# Start processing jobs from the queue
-npm run worker
-
-# Test initialization without processing
-npm run worker -- --dry-run
-```
-
-### Enqueue Jobs
-
-```bash
-# Single keyword search
-npm run enqueue -- --keyword "iphone 15"
-
-# With custom page limit
-npm run enqueue -- --keyword "laptop gaming" --pages 10
-
-# Direct URL
-npm run enqueue -- --url "https://www.tokopedia.com/search?q=laptop"
-
-# Bulk jobs from file
-npm run enqueue -- --bulk keywords.json
-```
-
-### Bulk Job File Format
-
-```json
-{
-  "jobs": [
-    { "keyword": "iphone 15", "maxPages": 5 },
-    { "keyword": "samsung galaxy", "maxPages": 3 },
-    { "url": "https://www.tokopedia.com/search?q=laptop" }
-  ]
-}
-```
-
-### Manual Runner with Detail Scraping
-
-For quick testing or standalone usage without Redis/queue setup:
-
-```bash
-# Basic usage with keyword
+# Scrape semua produk (unlimited)
 node manual-run.js "laptop"
 
-# With product limit (default: 20)
-node manual-run.js "iphone 15" 10
+# Scrape maksimal 50 produk
+node manual-run.js "keyboard mechanical" 50
 ```
 
-**How it works:**
-1. Opens browser with your saved login session
-2. Navigates to Tokopedia search page
-3. Scrolls and clicks "Load More" to collect product URLs
-4. Visits each product detail page to extract comprehensive data
-5. Saves results to `result_<keyword>_detail.json`
+### 3. Hasil
 
-**Data extracted per product:**
-- `name` - Product title
-- `price` - Numeric price
-- `rating` - Star rating (1-5)
-- `soldCount` - Number sold (handles "1rb+", "100+" formats)
-- `shopName` - Seller/shop name
-- `shopLocation` - Shop city
-- `productUrl` - Direct product link
+File output: `result_<keyword>_detail.json`
 
-### Programmatic Usage
-
-```javascript
-import { 
-  enqueueScrapeJob, 
-  startWorker,
-  getJobCounts 
-} from './src/index.js';
-
-// Start the worker
-await startWorker();
-
-// Enqueue a job
-const job = await enqueueScrapeJob({
-  keyword: 'iphone 15',
-  maxPages: 5,
-});
-
-console.log('Job ID:', job.id);
-
-// Check queue status
-const counts = await getJobCounts();
-console.log('Queue:', counts);
-```
-
-## Architecture
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Producer      │────▶│   Redis Queue   │────▶│   Worker(s)     │
-│  (enqueue-job)  │     │   (BullMQ)      │     │  (start-worker) │
-└─────────────────┘     └─────────────────┘     └────────┬────────┘
-                                                         │
-                                                         ▼
-                                              ┌─────────────────────┐
-                                              │  Puppeteer Cluster  │
-                                              │   + Stealth Plugin  │
-                                              └────────┬────────────┘
-                                                       │
-                                                       ▼
-                                              ┌─────────────────────┐
-                                              │   Cheerio Parser    │
-                                              │   + Data Transform  │
-                                              └────────┬────────────┘
-                                                       │
-                                                       ▼
-                                              ┌─────────────────────┐
-                                              │    JSON Output      │
-                                              └─────────────────────┘
+```json
+[
+  {
+    "name": "Laptop Lenovo ThinkPad T480",
+    "price": 2500000,
+    "priceText": "Rp2.500.000",
+    "rating": 4.8,
+    "soldCount": 1000,
+    "shopName": "RedStar Electronic",
+    "shopLocation": "Jakarta Pusat",
+    "productUrl": "https://www.tokopedia.com/...",
+    "keyword": "laptop",
+    "scrapedAt": "2026-01-12T..."
+  }
+]
 ```
 
 ## Project Structure
 
 ```
 scrape_engine/
+├── manual-run.js         # Main scraper script
+├── open-browser.js       # Helper untuk login manual
+├── chrome-profile/       # Folder session browser (auto-generated)
 ├── src/
-│   ├── index.js              # Main entry & exports
-│   ├── config/
-│   │   ├── index.js          # Environment configuration
-│   │   ├── selectors.js      # Stable DOM selectors
-│   │   └── user-agents.js    # User agent rotation
-│   ├── core/
-│   │   ├── cluster.js        # Puppeteer cluster setup
-│   │   ├── stealth.js        # Anti-detection config
-│   │   └── browser-utils.js  # Page interaction helpers
 │   ├── scraper/
-│   │   ├── auto-scroll.js    # Human-like scrolling
-│   │   ├── dom-selector.js   # Resilient selectors
-│   │   ├── detail-scraper.js # Detail page extraction (NEW)
-│   │   └── product-scraper.js # Main scraping logic
-│   ├── parser/
-│   │   ├── html-parser.js    # Cheerio extraction
-│   │   └── data-transformer.js # Data cleaning
-│   ├── queue/
-│   │   ├── connection.js     # Redis connection
-│   │   ├── producer.js       # Job creation
-│   │   └── worker.js         # Job processing
+│   │   └── detail-scraper.js  # Ekstraksi halaman detail
+│   ├── config/
+│   │   └── index.js           # Konfigurasi environment
 │   └── utils/
-│       ├── delay.js          # Human-like timing
-│       ├── logger.js         # Structured logging
-│       └── retry.js          # Retry with backoff
-└── scripts/
-    ├── start-worker.js       # Worker startup
-    └── enqueue-job.js        # Job CLI tool
+│       └── logger.js          # Logging
+└── result_*.json         # Output hasil scraping
 ```
 
-## Output Format
+## Configuration
 
-Jobs return JSON with the following structure:
+Edit file untuk menyesuaikan:
 
-```json
-{
-  "success": true,
-  "keyword": "iphone 15",
-  "totalProducts": 120,
-  "pagesScraped": 5,
-  "duration": 45000,
-  "scrapedAt": "2024-01-15T10:30:00.000Z",
-  "products": [
-    {
-      "name": "iPhone 15 Pro Max 256GB",
-      "price": 21999000,
-      "rating": 4.9,
-      "soldCount": 1500,
-      "shopName": "Apple Official Store",
-      "shopLocation": "Jakarta Selatan",
-      "productUrl": "https://www.tokopedia.com/...",
-      "imageUrl": "https://images.tokopedia.net/...",
-      "scrapedAt": "2024-01-15T10:30:00.000Z"
-    }
-  ]
-}
+| File | Apa yang bisa diubah |
+|------|---------------------|
+| `manual-run.js` | Chrome path, scroll behavior, delay timing |
+| `src/scraper/detail-scraper.js` | Data yang diekstrak (fields/selectors) |
+
+Lihat **[CUSTOMIZATION.md](CUSTOMIZATION.md)** untuk panduan lengkap.
+
+## Advanced Usage (Queue System)
+
+Untuk penggunaan dengan Redis queue (produksi/skala besar):
+
+```bash
+# Copy environment config
+cp .env.example .env
+
+# Edit .env dengan konfigurasi Redis Anda
+
+# Start worker
+npm run worker
+
+# Enqueue job
+npm run enqueue -- --keyword "iphone 15"
 ```
 
-## Anti-Detection Features
-
-1. **Stealth Plugin**: Masks `navigator.webdriver` and other automation flags
-2. **User Agent Rotation**: Random modern browser signatures
-3. **Viewport Randomization**: Slight variations in screen size
-4. **Human-Like Scrolling**:
-   - Variable scroll distances (300-700px)
-   - Smooth scrolling animation
-   - Random delays between scrolls
-   - 15% chance of "reading" pauses
-   - Occasional scroll-back behavior
-5. **Typing Simulation**: Random delays between keystrokes
-6. **Request Headers**: Indonesian locale headers
-
-## Error Handling
-
-- **Automatic Retries**: 3 attempts with exponential backoff
-- **Resilient Selectors**: Fallback chains for dynamic CSS classes
-- **Graceful Degradation**: Logs warnings for missing fields, continues scraping
-- **Circuit Breaker**: Stops scrolling after 3 consecutive no-content checks
+> ⚠️ Queue system memerlukan Redis server yang berjalan.
 
 ## License
 
