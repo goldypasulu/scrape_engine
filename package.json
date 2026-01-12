@@ -1,0 +1,31 @@
+{
+    "name": "scrape-engine",
+    "version": "1.0.0",
+    "description": "Tokopedia scraping engine with anti-detection and queue system",
+    "main": "src/index.js",
+    "type": "module",
+    "scripts": {
+        "start:worker": "node scripts/start-worker.js",
+        "worker": "npm run start:worker",
+        "enqueue": "node scripts/enqueue-job.js",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [
+        "scraper",
+        "puppeteer",
+        "tokopedia"
+    ],
+    "author": "Goldy Pasulu",
+    "license": "ISC",
+    "dependencies": {
+        "bullmq": "^5.0.0",
+        "cheerio": "^1.0.0-rc.12",
+        "dotenv": "^16.3.1",
+        "pino": "^9.0.0",
+        "pino-pretty": "^11.0.0",
+        "puppeteer": "^22.0.0",
+        "puppeteer-cluster": "^0.24.0",
+        "puppeteer-extra": "^3.3.6",
+        "puppeteer-extra-plugin-stealth": "^2.11.2"
+    }
+}

@@ -36,6 +36,8 @@ build/
 .local-chromium/
 puppeteer_dev_profile/
 chrome-profile/
-*.json
+result_*.json
 *.html
 *.png
+!package.json
+!package-lock.json
