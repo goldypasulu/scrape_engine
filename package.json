@@ -1,5 +1,5 @@
 {
-    "name": "scrape-engine",
+    "name": "tokopedia-scraper",
     "version": "1.0.0",
     "description": "Tokopedia scraping engine with anti-detection and queue system",
     "main": "src/index.js",

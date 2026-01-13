@@ -1,4 +1,4 @@
-# Tokopedia Scrape Engine
+# Tokopedia Scraper
 
 Scraping engine untuk Tokopedia dengan fitur anti-detection dan detail page scraping.
 
